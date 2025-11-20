@@ -206,8 +206,17 @@ class Trainer:
             # --- NEW: Save Best Model ---
             if self.checkpoint_dir and val_loss < best_val_loss:
                 best_val_loss = val_loss
-                save_path = os.path.join(self.checkpoint_dir, "best_model.pth")
-                torch.save(self.model.state_dict(), save_path)
+                save_path = os.path.join(self.checkpoint_dir, "best_model.pt")
+                torch.save(
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "norm_mean": self.norm_mean.cpu(),
+                        "norm_std": self.norm_std.cpu(),
+                        "epoch": epoch + 1,
+                    },
+                    save_path,
+                )
+                print(f"Saved improved checkpoint to {save_path}")
         
         return self.model
 
