@@ -10,6 +10,8 @@ from haversine import Unit, haversine
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+import folium
+
 
 # --- Helper utilities ---
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -123,7 +125,7 @@ class Trainer:
         self.norm_std = normalization_stats[1].to(device)
         self.optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         self.mse = nn.MSELoss()
-        self.history = {"train_loss": [], "val_loss": [], "val_dist_error": []}
+        self.history = {"train_loss": [], "val_loss": [], "train_dist_error": [], "val_dist_error": []}
         
         # --- NEW: Handle Checkpointing ---
         self.checkpoint_dir = checkpoint_dir
@@ -163,24 +165,33 @@ class Trainer:
 
         for epoch in range(epochs):
             self.model.train()
-            avg_loss = 0
+            avg_loss = 0.0
+            train_dist_err = 0.0
+
             for x, y in tqdm(self.train_loader, desc=f"Epoch {epoch+1} [Train]", leave=False):
                 x, y = x.to(self.device), y.to(self.device)
-                
+
                 # Teacher forcing input: Start token + Target shifted right
-                start_token = x[:, -1:, :] 
+                start_token = x[:, -1:, :]
                 dec_input = start_token if y.size(1) == 1 else torch.cat([start_token, y[:, :-1, :]], dim=1)
-                
+
                 pred = self.model(x, dec_input)
                 loss = self._combined_loss(pred, y)
-                
+
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+
                 avg_loss += loss.item()
-            
+                # distance error in meters for this batch
+                train_dist_err += self._calculate_meters_error(pred, y)
+
             train_loss = avg_loss / len(self.train_loader)
+            train_dist_err /= len(self.train_loader)
+
             self.history["train_loss"].append(train_loss)
+            self.history["train_dist_error"].append(train_dist_err)
+
             
             # Validation
             self.model.eval()
@@ -221,24 +232,34 @@ class Trainer:
         return self.model
 
     def plot_loss(self):
-        # (Keep your existing plot_loss code here, no changes needed)
-        fig, ax1 = plt.subplots(figsize=(10, 5))
-        
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss (MSE)', color='tab:blue')
-        ax1.plot(self.history['train_loss'], label='Train Loss', color='tab:blue')
-        ax1.plot(self.history['val_loss'], label='Val Loss', color='tab:blue', linestyle='--')
-        ax1.tick_params(axis='y', labelcolor='tab:blue')
-        
-        ax2 = ax1.twinx()
-        ax2.set_ylabel('Distance Error (Meters)', color='tab:red')
-        ax2.plot(self.history['val_dist_error'], label='Val Error (m)', color='tab:red')
-        ax2.tick_params(axis='y', labelcolor='tab:red')
-        
-        plt.title("Training Progress: Loss vs Physical Error")
+        epochs = range(1, len(self.history["train_loss"]) + 1)
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+        # ---- Left: Loss ----
+        ax1 = axes[0]
+        ax1.plot(epochs, self.history["train_loss"], label="train loss")
+        ax1.plot(epochs, self.history["val_loss"], label="validation loss")
+        ax1.set_xlabel("epoch")
+        ax1.set_ylabel("MSE loss")
+        ax1.set_title("train and validation loss vs number of epochs")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # ---- Right: Distance error ----
+        ax2 = axes[1]
+        ax2.plot(epochs, self.history["train_dist_error"], label="train distance error")
+        ax2.plot(epochs, self.history["val_dist_error"], label="validation distance error")
+        ax2.set_xlabel("epoch")
+        ax2.set_ylabel("mean distance error [m]")
+        ax2.set_title("train and validation distance error vs number of epochs")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
         fig.tight_layout()
-        plt.savefig("training_metrics.png")
+        plt.savefig("training_metrics.png", dpi=150)
         print("Saved training_metrics.png")
+
 
 # --- Evaluation with Static Plotting ---
 class Evaluator:
@@ -300,6 +321,9 @@ class Evaluator:
         print(f"Final predicted point is {final_error:.2f} meters away from actual location.")
 
         self._plot_static(true_df, pred_df, history_len)
+        # Also create an interactive Folium map
+        self._plot_folium(true_df, pred_df, history_len, outfile="prediction_map.html")
+
 
     def _plot_static(self, true_df, pred_df, split_index):
         plt.figure(figsize=(10, 8))
@@ -327,3 +351,49 @@ class Evaluator:
         
         plt.savefig("prediction_static.png", dpi=150)
         print("Saved prediction plot to 'prediction_static.png'")
+
+    def _plot_folium(self, true_df, pred_df, split_index, outfile="prediction_map.html"):
+        """
+        Create an interactive Folium map with:
+        - Black line: history (context)
+        - Green line: true future trajectory
+        - Red line: predicted future trajectory
+        """
+        # Center map on last history point
+        center_lat = true_df.iloc[split_index - 1]["Latitude"]
+        center_lon = true_df.iloc[split_index - 1]["Longitude"]
+
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=8, tiles="OpenStreetMap")
+
+        # Coordinates lists
+        hist_coords = list(zip(
+            true_df.iloc[:split_index]["Latitude"].to_list(),
+            true_df.iloc[:split_index]["Longitude"].to_list(),
+        ))
+        true_future_coords = list(zip(
+            true_df.iloc[split_index:]["Latitude"].to_list(),
+            true_df.iloc[split_index:]["Longitude"].to_list(),
+        ))
+        pred_coords = list(zip(
+            pred_df["Latitude"].to_list(),
+            pred_df["Longitude"].to_list(),
+        ))
+
+        # History (black)
+        if hist_coords:
+            folium.PolyLine(hist_coords, color="black", weight=3, tooltip="History").add_to(m)
+            folium.Marker(hist_coords[0], popup="Start", icon=folium.Icon(color="green")).add_to(m)
+            folium.Marker(hist_coords[-1], popup="Last history", icon=folium.Icon(color="blue")).add_to(m)
+
+        # True future (green)
+        if true_future_coords:
+            folium.PolyLine(true_future_coords, color="green", weight=3, tooltip="True future").add_to(m)
+            folium.Marker(true_future_coords[-1], popup="True end", icon=folium.Icon(color="darkgreen")).add_to(m)
+
+        # Predicted future (red)
+        if pred_coords:
+            folium.PolyLine(pred_coords, color="red", weight=3, tooltip="Predicted future").add_to(m)
+            folium.Marker(pred_coords[-1], popup="Predicted end", icon=folium.Icon(color="red", icon="flag")).add_to(m)
+
+        m.save(outfile)
+        print(f"Saved interactive prediction map to '{outfile}'")
