@@ -5,8 +5,8 @@ import os
 # 1. PATHS
 # Get current directory to avoid hardcoded paths
 BASE_DIR = os.getcwd()
-DATA_RAW = os.path.join(BASE_DIR, "data_raw")           # Where zip/csv files are
-PARQUET_OUT = os.path.join(BASE_DIR, "test_data/parquet") # Where cleaned data goes
+DATA_RAW = os.path.join(BASE_DIR, "raw_ais_data")           # Where zip/csv files are
+PARQUET_OUT = os.path.join(BASE_DIR, "cleaned_test_data/parquet") # Where cleaned data goes
 CHECKPOINT_DIR = os.path.join(BASE_DIR, "checkpoints")    # Where model weights are saved
 
 # 2. COMPUTE
@@ -26,6 +26,6 @@ NUM_LAYERS = 3       # Transformer layers
 DIM_FEEDFORWARD = 256 
 
 # 5. TRAINING PARAMETERS
-NUM_EPOCHS = 10
+NUM_EPOCHS = 2
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001

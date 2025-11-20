@@ -28,7 +28,7 @@ def main():
     # Run
     preprocessor.process_local_csv(config.DATA_RAW)
 
-    print("\nDone! You can now proceed to 'run_2_train.py'.")
+    print("\nDone! You can now proceed to 'run_2_training.py'.")
 
 if __name__ == "__main__":
     main()

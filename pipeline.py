@@ -114,7 +114,7 @@ class VesselTrajectoryDataset(Dataset):
 
 # --- Training with detailed Metrics ---
 class Trainer:
-    def __init__(self, model, train_loader, val_loader, learning_rate, device, normalization_stats):
+    def __init__(self, model, train_loader, val_loader, learning_rate, device, normalization_stats, checkpoint_dir=None):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -124,6 +124,11 @@ class Trainer:
         self.optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         self.mse = nn.MSELoss()
         self.history = {"train_loss": [], "val_loss": [], "val_dist_error": []}
+        
+        # --- NEW: Handle Checkpointing ---
+        self.checkpoint_dir = checkpoint_dir
+        if self.checkpoint_dir:
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
 
     def _combined_loss(self, pred, true):
         # Simple MSE on normalized values
@@ -154,6 +159,8 @@ class Trainer:
 
     def train(self, epochs):
         print(f"\nStarting Training for {epochs} epochs...")
+        best_val_loss = float('inf') # Track best loss
+
         for epoch in range(epochs):
             self.model.train()
             avg_loss = 0
@@ -195,10 +202,17 @@ class Trainer:
             self.history["val_dist_error"].append(dist_error)
             
             print(f"Epoch {epoch+1} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Error: {dist_error:.2f} meters/step")
+            
+            # --- NEW: Save Best Model ---
+            if self.checkpoint_dir and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                save_path = os.path.join(self.checkpoint_dir, "best_model.pth")
+                torch.save(self.model.state_dict(), save_path)
         
         return self.model
 
     def plot_loss(self):
+        # (Keep your existing plot_loss code here, no changes needed)
         fig, ax1 = plt.subplots(figsize=(10, 5))
         
         ax1.set_xlabel('Epoch')
